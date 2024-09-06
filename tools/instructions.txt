@@ -1,0 +1,50 @@
+* 0. install dependencies :
+
+> sudo apt-get update -yq
+> sudo apt-get install -yq apt-utils lsb-release curl gpg gcc make python2-dev python3-dev mercurial
+
+* 1. install redis :
+[https://redis.io/docs/install/install-redis/install-redis-on-linux/]
+
+> curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+> echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+> sudo apt-get update -yq
+> sudo apt-get install -yq redis
+
+
+* 2. install the hiredis C library :
+[https://developer.redis.com/develop/C/]
+
+check wether redis is running or not with :
+> netstat -tulp | grep LISTEN | grep 6379
+
+if it is not running, run it with :
+> redis-server
+
+install the hiredis library :
+> wget https://github.com/redis/hiredis/archive/master.zip
+> unzip master.zip
+> cd hiredis-master
+> make
+> make install
+> cd ..
+
+
+* 3. install spidermonkey :
+[https://firefox-source-docs.mozilla.org/setup/linux_build.html]
+
+> cd spidermonkey-last
+> curl https://hg.mozilla.org/mozilla-central/raw-file/default/python/mozboot/bin/bootstrap.py -O
+> python3 bootstrap.py --no-interactive --application-choice js
+> rm -f bootstrap.py
+> cd mozilla-unified
+> hg apply ../changes.diff
+> rm -rf ~/.mozbuild
+> ./mach clobber
+> ./mach build
+> cd ../..
+
+
+* 4. run a JS test script :
+
+> ./run_script.sh js/test_jit.sh

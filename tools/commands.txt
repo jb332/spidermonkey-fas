@@ -1,0 +1,6 @@
+~/Documents/research/projects/fas/code/spidermonkey-last/mozilla-unified$ ./mach build
+~/Documents/research/projects/fas/code/spidermonkey-last/mozilla-unified/obj-x86_64-pc-linux-gnu/dist/bin$ ./js --no-threads ../../../../../js/test_jit.js
+~/Documents/research/projects/fas/code/spidermonkey-last/mozilla-unified$ redis-cli
+  FLUSHALL
+  KEYS *
+

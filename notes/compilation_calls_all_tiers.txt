@@ -1,0 +1,66 @@
+
+ * Baseline Interpreter :
+ 
+-> CanEnterBaselineInterpreterAtBranch
+  -> CanEnterBaselineInterpreter
+
+-> MaybeEnterJit
+  -> CanEnterBaselineMethod<BaselineTier::Interpreter>
+    -> CanEnterBaselineInterpreter
+
+ * Baseline Compiler :
+    
+-> BaselineInterpreterCodeGen::emitWarmUpCounterIncrement
+  -> BaselineCompileFromBaselineInterpreter
+    -> CanEnterBaselineJIT
+      -> BaselineCompile
+
+-> MaybeEnterJit
+  -> CanEnterBaselineMethod<BaselineTier::Compiler>
+    -> CanEnterBaselineJIT
+      -> BaselineCompile
+
+ * Ion :
+
+-> BaselineCanEnterAtBranch
+  -> Compile
+
+-> BaselineCanEnterAtEntry
+  -> Compile
+
+-> MaybeEnterJit
+  -> CanEnterIon
+    -> Compile
+
+use --ion-eager, use it if baseline disabled to compile baseline and switch to ion directly
+
+
+case 1 : ./js --no-threads --ion-eager ../../../../../js/test_jit.js
+  -> MaybeEnterJit
+    -> CanEnterIon
+      -> CanEnterBaselineMethod<BaselineTier::Compiler> [eagerIonCompilation && !hasBaselineScript]
+      -> Compile (ION COMPILER)
+    -> EnterJit
+
+case 2 : ./js --no-threads --baseline-eager ../../../../../js/test_jit.js
+  -> MaybeEnterJit
+    -> CanEnterIon
+      -> return Method_Skipped [!hasBaselineScript]
+    -> CanEnterBaselineMethod<BaselineTier::Compiler>
+      -> CanEnterBaselineJIT
+        -> BaselineCompile (BASELINE COMPILER)
+    -> EnterJit
+
+case 3 : ./js --no-threads ../../../../../js/test_jit.js
+  -> MaybeEnterJit
+    -> CanEnterIon
+      -> return Method_Skipped [!hasBaselineScript]
+    -> CanEnterBaselineMethod<BaselineTier::Compiler>
+      -> CanEnterBaselineJIT
+        -> return Method_Skipped [!mightHaveEagerBaselineHint && warmUpCount <= baselineJitWarmUpThreshold]
+    -> CanEnterBaselineMethod<BaselineTier::Interpreter>
+      -> CanEnterBaselineInterpreter
+        -> return Method_Compiled [hasJitScript]
+        |
+        -> ensureHasJitScript [!hasJitScript]
+          -> createJitScript (BASELINE INTERPRETER BUILDER)

@@ -1,0 +1,178 @@
+éviter la complexité d'ion monkey en utilisant les cas où la compilation a déjà été effectuée et où il suffit d'aller chercher le code compilé.
+
+ou alors copier depuis redis au lieu du code compilé et compiler un petit code inutile et rapide à compiler avant ça
+
+
+désactiver lazy functions pour être sûr d'avoir un script compilé pour chaque BaseScript
+
+sérialiser et désérialiser JSScript
+
+
+emplacements où le saut vers du code compilé ion a lieu :
+ - BaselineCodeGen.cpp:1495 : changement du pointeur vers le code Ion pour le code Baseline JIT
+ 
+
+-> BaselineCodeGen<Handler>::emitPrologue : calls :
+  -> BaselineCompilerCodeGen::emitWarmUpCounterIncrement : generates baseline code that calls :
+    -> IonCompileScriptForBaselineAtEntry ("-> script = ...")
+      -> IonCompileScriptForBaseline
+        -> BaselineCanEnterAtEntry
+          -> Compile ("[Compile] Retrieving compiled code from Redis database")
+                     OR
+                     ("[Compile] Compiling code")
+
+-> BaselineCodeGen<Handler>::emit_LoopHead
+  -> BaselineCompilerCodeGen::emitWarmUpCounterIncrement : generates baseline code that calls :
+    -> IonCompileScriptForBaselineOSR ("-> script = ...")
+      -> IonCompileScriptForBaseline
+        -> BaselineCanEnterAtBranch ("[BaselineCanEnterAtBranch] Compiling code")
+          -> Compile ("[Compile] Retrieving compiled code from Redis database")
+                     OR
+                     ("[Compile] Compiling code")
+
+-> js::Interpret
+  -> jit::MaybeEnterJit
+    -> jit::CanEnterIon ("-> script = ...")
+    			 ("[CanEnterIon] Requesting compilation\n")
+      -> Compile ("[Compile] Retrieving compiled code from Redis database")
+                 OR
+                 ("[Compile] Compiling code")
+        IF (optimisationLevel == OptimizationLevel::DontCompile) [compares the warm up counter with the warm up threshold]
+        -> STOP
+        ELSE
+        -> IonCompile
+
+
+
+different paths displayed :
+
+
+
+-> script = <path>
+[BaselineCanEnterAtEntry] Compiling code
+[Compile] Compiling code
+...
+-> script = <path>
+[CodeGenerator::link] Linking code
+[CodeGenerator::link] Stored compilation data in redis
+[CodeGenerator::link] compilationId = [bytecodeHash=...
+
+
+-> script = <path>
+[BaselineCanEnterAtBranch] Compiling code
+[Compile] Compiling code
+...
+-> script = <path>
+[CodeGenerator::link] Linking code
+[AddInlinedCompilations] inlinedScript = <path>
+[CodeGenerator::link] Stored compilation data in redis
+[CodeGenerator::link] compilationId = [bytecodeHash=...
+[IonCompileScriptForBaselineOSR] jitcode = <address>
+[IonCompileScriptForBaselineOSR] info = <address>
+[IonCompileScriptForBaselineOSR] Jumping into compiled code
+
+
+-> script = <path>
+[IonCompileScriptForBaselineOSR] jitcode = <address>
+[IonCompileScriptForBaselineOSR] info = <address>
+[IonCompileScriptForBaselineOSR] Jumping into compiled code
+
+
+-> script = <path>
+[BaselineCanEnterAtEntry] Compiling code
+[Compile] Retrieving compiled code from Redis database
+[restoreJitCode] Restoring JitCode and context
+
+
+
+dans "Linker::newCode", "awcjf" appelle "makeWritable" pour rendre la mémoire qui doit contenir le code inscriptible
+puis, lorsque l'objet "awcjf" est détruit, il appelle "makeExecutableAndFlushICache"
+cela se produit lorsque l'on quitte la fonction "CodeGenerator::link" car l'objet "linker" qui contient "awcjf" est détruit
+        
+        
+        
+Tester d'abord de faire une copie en mémoire de JitCode et de faire pointer le programme vers la copie pour voir si ça crashe
+        
+Je dois sauvegarder IonScript et JitCode (method() de IonScript)
+
+A chaque restauration, il faut d'abord récupérer le IonScript, puis le JitCode et refaire toutes les étapes de CodeGenerator::link qui permettent de lier le IonScript au contexte. On peut ignorer les étapes qui copient du contexte de compilation vers le IonScript, il suffit de désérialiser le IonScript.
+On stocke dans redis la taille du IonScript puis la taille du JitCode, puis le IonScript, puis le JitCode.
+On peut ainsi facilement accéder aux deux objets et les recréer.
+Il faudra certainement faire des mises à jour de certains champs dans IonScript, comme le JSScript associé par exemple.
+
+
+hash bytecode + function name as key
+find bytecode to hash
+
+gérer les compilations inlined
+
+gdb commands :
+
+
+run --no-threads ../../../../jitbull/code/js_jit_triggers/test_jit.js
+
+bt (backtrace)
+
+i sh (shared libraries)
+
+b restoreJitCodeAndContext
+b 14409
+
+step (dive into functions when called)
+next (don't dive into functions when called)
+finish (go to current function return)
+continue (continue normal execution)
+
+info variables (global and static variables)
+info locals (function local variables)
+info args (function arguments)
+
+x/nfu <address>
+
+si
+disas *$rip,+32
+disas savedJitCode->raw(),+128
+
+execute savedJitCode on one side and newJitCode on the other and compare their execution with si and disas to know where the divergence occurs
+regarder si j'ai le droit d'allouer de la mémoire
+look for double free, check if allocated memory is marked as shouldn't be garbage collected
+
+I think that sometimes the memory I allocated for the Jit gets garbage collected. Check how to fix that
+Try to find where memory is freed
+Try to save data needed for context modification like "profilerCallSites"
+the ExecutablePool pool_ which points to the allocated executable memory containing the code is released in JitCode::finalize (Ion.cpp)
+JitCode::finalize seems to never be called and 
+
+For IonScript, look for releaseJitScriptOnFinalize()
+
+
+flow :
+
+b restoreJitCodeAndContext
+run --no-threads ../../../../jitbull/code/js_jit_triggers/test_jit_medium.js
+b 14409
+continue
+x/10xw savedJitCode
+x/10xw newJitCode
+p *savedJitCode
+p *newJitCode
+
+
+comparison between savedJitCode and newJitCode flow :
+
+b restoreJitCodeAndContext
+run --no-threads --ion-inlining=off ../../../../jitbull/code/js_jit_triggers/test_jit.js
+b 14409
+continue
+disas newJitCode->raw(),+32
+b *<first_address_shown_in_disas>
+-> loop on :
+  si
+  disas *$rip,+32
+
+
+./mach build
+./mach run --no-threads --ion-inlining=off ../../../../jitbull/code/js_jit_triggers/test_jit.js
+
+afficher le contenu de ionScript depuis CodeGenerator::link et dans linkFromRedis
+

@@ -1,0 +1,21 @@
+une fonction fas peut avoir plusieurs bouts de codes compilés
+quand on enregistre un bout de code compilé, on lui donne comme clé : hash(nom_fonction_origine) + hash(bytecode)
+
+
+
+prepareVMCall();
+
+pushBytecodePCArg();                                         -> push "jsbytecode*" argument
+pushArg(R0.scratchReg());                                    -> push "uint32_t" argument
+masm.PushBaselineFramePtr(FramePointer, R0.scratchReg());    -> push "BaselineFrame*" argument
+
+"JSContext*" argument seems to be automatically pushed
+and the last argument, here "IonOsrTempData**", appears to be the result register (r0)
+
+using Fn = bool (*)(JSContext*, BaselineFrame*, uint32_t, jsbytecode*,
+                IonOsrTempData**);
+if (!callVM<Fn, IonCompileScriptForBaselineOSR>()) {
+  return false;
+}
+
+Fn contient le type de la fonction appelée
